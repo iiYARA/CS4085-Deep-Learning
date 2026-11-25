@@ -6,16 +6,14 @@ Complete student-style implementation for CS4085.
 
 [Open in Colab](https://colab.research.google.com/github/iiYARA/CS4085-Deep-Learning/blob/main/Project/DrawNet/DrawNet.ipynb)
 
-## Easiest way: Google Colab
-1. Open https://colab.research.google.com/ and choose Upload notebook.
-2. Upload DrawNet.ipynb.
-3. Optional: Runtime > Change runtime type > GPU.
-4. Run the installation cell first, then run the remaining cells in order.
-5. Keep QUICK_RUN=False for the full experiment. QUICK_RUN=True uses 150 images per class and one epoch to check the pipeline only.
-6. Set USE_DRIVE=True to persist results in your own Google Drive.
-7. The last cell downloads a ZIP of models, measured results and charts.
+## Run the full experiment in Google Colab
 
-The first run downloads the full bitmap file for each selected category (roughly 1 GB total). Downloads are cached in DrawNet_results/data. CPU training also works, but can take longer. Pinning the dependencies helps reproducibility; a runtime restart can be needed after the installation cell.
+1. Open `DrawNet.ipynb` with the link above. Start a fresh Python runtime if the old one has already imported a different TensorFlow version. A GPU is optional.
+2. Choose **Runtime → Run all**. The setup cell reuses compatible Colab packages and installs Gradio if needed.
+3. Leave `QUICK_RUN = False` for the experiment. `QUICK_RUN = True` uses 150 drawings per class and one epoch for a pipeline check. Keep separate result folders when running both modes.
+4. Enable `USE_DRIVE` before running to keep files in your own Google Drive, or download the ZIP offered by the last cell before disconnecting.
+
+The first run downloads ten official Quick Draw bitmap files (about 1 GB) into `DrawNet_results/data`. A valid cache is reused on subsequent runs. The final ZIP contains trained checkpoints, TFLite models, plots, splits, and measured results. It excludes the raw bitmap downloads.
 
 ## Models
 - M0: two Conv2D blocks (16 and 32 filters), global average pooling and softmax.
@@ -39,15 +37,39 @@ Augmentation settings are fixed defaults (rotation factor 0.05 and translation 0
 
 Exploratory H1: M1 gains >=1 percentage point. H2: M2 is >=60% smaller than M1 float and retains at least half of M1's positive gain over M0. These are targets, not guaranteed outcomes.
 
-## Demo
-The Gradio interface accepts black drawings on a white canvas and compares the three model predictions. It shows the processed 28x28 input and the measured results table. Predictions are limited to the ten classes; it does not detect unknown objects.
-RUN_DEMO=True starts the interface. In Colab, set SHARE_DEMO=True if you need a temporary external URL. This publishes a temporary demo only when the user runs the cell with that option. This package is not a permanently hosted website.
+## Run locally or open the demo without training
 
-## Run the packaged trained demo
-From this folder, install requirements.txt and run `python app.py`. The app reads trained_results and does not retrain the models. It starts a local URL. For a temporary external link change SHARE_DEMO to True in app.py.
+Use CPython 3.12 or 3.13. From `Project/DrawNet`, create a virtual environment and use its Python to install and run the app.
 
-## Local Python
-Use Python 3.10-3.12. Install requirements.txt, then run python drawnet.py. Adjust the settings at the top. With RUN_DEMO=False the script runs all experiments and exports the results without serving the interface.
+**Windows PowerShell**
+
+```powershell
+py -3.12 -m venv .venv
+.\.venv\Scripts\python.exe -m pip install -r requirements.txt
+.\.venv\Scripts\python.exe app.py
+```
+
+**macOS or Linux**
+
+```sh
+python3.12 -m venv .venv
+.venv/bin/python -m pip install -r requirements.txt
+.venv/bin/python app.py
+```
+
+On Windows, use a short path for the virtual environment if pip reports a long-path error while unpacking TensorFlow.
+
+Open the local URL printed by Gradio. Draw one of the ten classes or click **New challenge** for a random prompt. **Compare guesses** shows each model’s top three predictions and a 28×28 preview of its input. Challenge mode counts how many models guessed the prompt. Use **Clear drawing** to try again and expand **Measured test results** to see the saved metrics.
+
+`python app.py` uses the repository's packaged models. To use a new experiment, extract the notebook's results ZIP and pass its directory to the app. Use the same virtual environment Python as above.
+
+```sh
+python app.py --results-dir DrawNet_results
+```
+
+The directory must contain `m0_float.tflite`, `m1_float.tflite`, `m2_int8.tflite`, `classes.json`, and `results.csv` from the same run. The app loads those artifacts directly, with no dataset download or training.
+
+To run the notebook locally, install JupyterLab with `python -m pip install jupyterlab`, start it with `python -m jupyterlab`, then open the notebook and run all cells. Alternatively use `python drawnet.py`. For a script run that exits after exporting, set `RUN_DEMO = False` in the script. In hosted Colab, set `SHARE_DEMO = True` in the setup cell for a temporary public Gradio URL. By default, hosted Colab skips launch and the exported models can be used in the local demo.
 
 ## Attribution and AI use
 Dataset: Google Creative Lab Quick Draw, https://github.com/googlecreativelab/quickdraw-dataset (CC BY 4.0 drawings).

@@ -2,7 +2,7 @@ import os
 os.environ['TF_CPP_MIN_LOG_LEVEL'] = '2'
 import json, time, random, platform, hashlib, shutil, gc
 from pathlib import Path
-from urllib.request import urlretrieve
+from urllib.request import urlopen
 from urllib.parse import quote
 import numpy as np
 import pandas as pd
@@ -19,6 +19,7 @@ QUICK_RUN = False
 USE_DRIVE = False
 RUN_DEMO = True
 SHARE_DEMO = False
+IN_COLAB = 'COLAB_RELEASE_TAG' in os.environ
 class_names = ['tree', 'cup', 'bicycle', 'apple', 'cat', 'car', 'house', 'fish', 'flower', 'umbrella']
 SAMPLES_PER_CLASS = 150 if QUICK_RUN else 3000
 EPOCHS = 1 if QUICK_RUN else 15
@@ -60,26 +61,46 @@ environment = dict(python=platform.python_version(), tensorflow=tf.__version__,
 print(environment)
 print('Mode:', 'PIPELINE CHECK' if QUICK_RUN else 'FULL EXPERIMENT')
 
+def read_bitmaps(path):
+    drawings = np.load(path, mmap_mode='r', allow_pickle=False)
+    if drawings.ndim != 2 or drawings.shape[1] != 784 or drawings.dtype != np.uint8:
+        raise ValueError(f'Unexpected Quick Draw bitmap format: {path.name}')
+    return drawings
+
+
+def load_bitmaps(name):
+    path = DATA / f'{name}.npy'
+    if path.exists():
+        try:
+            return read_bitmaps(path)
+        except (OSError, ValueError):
+            print(f'Replacing invalid cached data for {name}')
+    url = 'https://storage.googleapis.com/quickdraw_dataset/full/numpy_bitmap/' + quote(name) + '.npy'
+    temporary = path.with_suffix('.part')
+    for attempt in range(3):
+        try:
+            print(f'Downloading {name} ({attempt + 1}/3)', flush=True)
+            with urlopen(url, timeout=60) as response, temporary.open('wb') as output:
+                shutil.copyfileobj(response, output)
+                length = response.headers.get('Content-Length')
+                if length is not None and output.tell() != int(length):
+                    raise OSError('Incomplete download')
+            drawings = read_bitmaps(temporary)
+            del drawings  # Release the memory map before renaming on Windows.
+            temporary.replace(path)
+            return read_bitmaps(path)
+        except (OSError, ValueError) as error:
+            temporary.unlink(missing_ok=True)
+            if attempt == 2:
+                raise RuntimeError(f'Could not download valid Quick Draw data for {name}: {url}') from error
+            time.sleep(2)
+
 
 images, labels = [], []
 seen = set()
 audit = []
 for label, name in enumerate(class_names):
-    path = DATA / (name + '.npy')
-    if not path.exists():
-        url = 'https://storage.googleapis.com/quickdraw_dataset/full/numpy_bitmap/' + quote(name) + '.npy'
-        print('Downloading', name)
-        temporary = path.with_suffix('.part')
-        for attempt in range(3):
-            try:
-                urlretrieve(url, temporary)
-                break
-            except Exception:
-                if attempt == 2:
-                    raise
-                time.sleep(2)
-        temporary.replace(path)
-    drawings = np.load(path, mmap_mode='r', allow_pickle=False)
+    drawings = load_bitmaps(name)
     rng = np.random.default_rng(SEED + label)
     order = rng.permutation(len(drawings))
     selected = []
@@ -121,6 +142,7 @@ X = X_uint8.astype('float32')[..., np.newaxis] / 255.0
 X_train, y_train = X[train_ids], y[train_ids]
 X_val, y_val = X[val_ids], y[val_ids]
 X_test, y_test = X[test_ids], y[test_ids]
+assert not set(train_ids) & set(val_ids)
 assert not set(train_ids) & set(test_ids)
 assert not set(val_ids) & set(test_ids)
 np.savez_compressed(OUT / 'splits.npz', X_train=X_train, y_train=y_train,
@@ -353,7 +375,7 @@ for ax, name in zip(axes, paths):
     matrix = confusion_matrix(y_test, prediction, labels=range(len(class_names)))
     ConfusionMatrixDisplay(matrix, display_labels=class_names).plot(ax=ax, colorbar=False, xticks_rotation=90)
     ax.set_title(name)
-    report = classification_report(y_test, prediction, target_names=class_names, output_dict=True, zero_division=0)
+    report = classification_report(y_test, prediction, labels=range(len(class_names)), target_names=class_names, output_dict=True, zero_division=0)
     (OUT / (name + '_classification_report.json')).write_text(json.dumps(report, indent=2))
 plt.tight_layout()
 plt.savefig(OUT / 'confusion_matrices.png', dpi=180)
@@ -374,8 +396,13 @@ if len(wrong):
 a0, a1, a2 = results['accuracy']
 gain = a1 - a0
 size_reduction = 100 * (1 - results.loc['M2', 'size_KiB'] / results.loc['M1', 'size_KiB'])
-h1 = bool(gain >= 0.01)
-h2 = bool(size_reduction >= 60 and gain > 0 and (a2 - a0) >= 0.5 * gain)
+# Compare integer counts and file bytes so exact threshold cases do not depend on rounding.
+correct = {name: int(np.count_nonzero(scores.argmax(axis=1) == y_test))
+           for name, scores in probabilities.items()}
+gain_count = correct['M1'] - correct['M0']
+h1 = 100 * gain_count >= len(y_test)
+h2 = (5 * paths['M2'].stat().st_size <= 2 * paths['M1'].stat().st_size
+      and gain_count > 0 and 2 * (correct['M2'] - correct['M0']) >= gain_count)
 summary = dict(H1_supported_this_run=h1, H2_supported_this_run=h2,
                M1_gain_percentage_points=float(100*gain),
                M2_accuracy_change_vs_M1_percentage_points=float(100*(a2-a1)),
@@ -423,24 +450,98 @@ def recognize_drawing(value):
     for name in ['M0', 'M1', 'M2']:
         scores = predict_lite(demo_interpreters[name], image[np.newaxis])[0]
         predictions.append({label: float(score) for label, score in zip(class_names, scores)})
-    return *predictions, image[:, :, 0]
+    return (*predictions, (image[:, :, 0] * 255).round().astype(np.uint8))
+
+def build_demo():
+    import secrets
+    import gradio as gr
+
+    def blank_canvas():
+        return Image.new('RGB', (360, 360), 'white')
+
+    def clear_drawing():
+        return blank_canvas(), None, None, None, None, ''
+
+    def new_challenge(previous):
+        target = secrets.choice([name for name in class_names if name != previous])
+        return target, f'### Draw **{target}**', *clear_drawing()
+
+    def compare_drawing(value, target):
+        outputs = recognize_drawing(value)
+        if not target:
+            return (*outputs, '')
+        matches = [name for name, scores in zip(('M0', 'M1', 'M2'), outputs[:3])
+                   if max(scores, key=scores.get) == target]
+        picked = ', '.join(matches)
+        feedback = (f'**{len(matches)} of 3 models guessed {target}.** {picked}'
+                    if matches else f'**0 of 3 models guessed {target}.** Try another sketch.')
+        return (*outputs, feedback)
+
+    css = """
+    #drawnet-studio { max-width: 1080px; margin: 0 auto; }
+    #drawnet-heading { padding: 1.05rem 1.25rem; border-radius: 16px;
+        background: linear-gradient(120deg, #251c57, #15485a);
+        color: #fff; }
+    #drawnet-heading h1 { color: #fff; margin: 0 0 .3rem; }
+    #drawnet-heading p { color: #eef1ff; margin: 0; }
+    #drawnet-workspace { display: grid;
+        grid-template-columns: minmax(0, 1.15fr) minmax(0, 1fr);
+        align-items: start; }
+    #drawnet-predictions { gap: .8rem; }
+    #drawnet-actions { flex-wrap: wrap; }
+    #drawnet-actions button { min-width: 105px; }
+    @media (max-width: 740px) {
+        #drawnet-workspace { grid-template-columns: minmax(0, 1fr); }
+    }
+    """
+    theme = gr.themes.Soft(primary_hue='indigo', neutral_hue='slate')
+    with gr.Blocks(title='DrawNet', theme=theme, css=css) as demo:
+        with gr.Column(elem_id='drawnet-studio'):
+            gr.Markdown('# DrawNet\nSketch a class and compare three model guesses.',
+                        elem_id='drawnet-heading')
+            with gr.Row(elem_id='drawnet-workspace'):
+                with gr.Column():
+                    target = gr.State('')
+                    prompt = gr.Markdown('### Free draw')
+                    with gr.Row():
+                        challenge = gr.Button('New challenge', variant='secondary')
+                    sketch = gr.Sketchpad(
+                        value=blank_canvas(), type='numpy', image_mode='RGBA',
+                        canvas_size=(360, 360), height=375, layers=False,
+                        show_download_button=False, show_fullscreen_button=False,
+                        brush=gr.Brush(colors=['#000000'], color_mode='fixed', default_size=8),
+                        label='Drawing canvas',
+                    )
+                    with gr.Row(elem_id='drawnet-actions'):
+                        recognize = gr.Button('Compare guesses', variant='primary')
+                        clear = gr.Button('Clear drawing', variant='secondary')
+                    gr.Markdown('Classes · ' + ', '.join(class_names))
+                with gr.Column(elem_id='drawnet-predictions'):
+                    verdict = gr.Markdown()
+                    predictions = [
+                        gr.Label(num_top_classes=3, label=label)
+                        for label in ('M0 · Baseline CNN', 'M1 · Augmented CNN', 'M2 · Full INT8')
+                    ]
+                    processed = gr.Image(label='28 × 28 model input', image_mode='L',
+                                         height=150, show_download_button=False)
+            with gr.Accordion('Measured test results', open=False):
+                gr.Dataframe(value=results.reset_index(), interactive=False, label='Metrics')
+        drawing_outputs = [sketch, *predictions, processed, verdict]
+        recognize.click(compare_drawing, inputs=[sketch, target],
+                        outputs=[*predictions, processed, verdict],
+                        concurrency_limit=1, api_name='recognize')
+        clear.click(clear_drawing, outputs=drawing_outputs, api_name='clear')
+        challenge.click(new_challenge, inputs=target, outputs=[target, prompt, *drawing_outputs],
+                        api_name='challenge')
+    return demo
+
 
 if RUN_DEMO:
-    import gradio as gr
-    with gr.Blocks(title='DrawNet') as demo:
-        gr.Markdown('# DrawNet\nDraw an object and compare three small neural network models.')
-        gr.Markdown('Classes: ' + ', '.join(class_names))
-        with gr.Row():
-            sketch = gr.Sketchpad(type='numpy', image_mode='RGBA', canvas_size=(360, 360),
-                                 brush=gr.Brush(colors=['#000000'], color_mode='fixed', default_size=8),
-                                 label='Draw here')
-            with gr.Column():
-                outputs = [gr.Label(num_top_classes=3, label=name) for name in ['M0 Baseline', 'M1 Augmentation', 'M2 INT8']]
-                processed = gr.Image(label='28 by 28 model input', image_mode='L')
-        button = gr.Button('Recognize', variant='primary')
-        button.click(recognize_drawing, inputs=sketch, outputs=outputs+[processed], concurrency_limit=1)
-        gr.Dataframe(value=results.reset_index(), interactive=False, label='Measured results')
-    demo.launch(share=SHARE_DEMO)
+    if IN_COLAB and not SHARE_DEMO:
+        print('To launch in hosted Colab, set SHARE_DEMO=True and rerun this cell.')
+    else:
+        demo = build_demo()
+        demo.launch(share=SHARE_DEMO, prevent_thread_lock=True)
 
 
 # The archive contains models, figures, configuration, splits and real results.
@@ -452,8 +553,9 @@ for path in OUT.iterdir():
         shutil.copy2(path, archive_dir / path.name)
 archive = shutil.make_archive(str(OUT / 'DrawNet_results'), 'zip', archive_dir)
 print('Saved:', archive)
-try:
+if IN_COLAB:
     from google.colab import files
     files.download(archive)
-except ImportError:
-    print('Open the results folder to get your files.')
+
+if RUN_DEMO and not IN_COLAB:
+    demo.block_thread()
