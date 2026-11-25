@@ -4,11 +4,11 @@ Team: Yara Mohammad, Lama Alturki, Amal Shuaileh.
 
 Complete student-style implementation for CS4085.
 
-[Open in Colab](https://colab.research.google.com/github/iiYARA/CS4085-Deep-Learning/blob/main/Project/DrawNet/DrawNet_Complete.ipynb)
+[Open in Colab](https://colab.research.google.com/github/iiYARA/CS4085-Deep-Learning/blob/main/Project/DrawNet/DrawNet.ipynb)
 
 ## Easiest way: Google Colab
 1. Open https://colab.research.google.com/ and choose Upload notebook.
-2. Upload DrawNet_Complete.ipynb.
+2. Upload DrawNet.ipynb.
 3. Optional: Runtime > Change runtime type > GPU.
 4. Run the installation cell first, then run the remaining cells in order.
 5. Keep QUICK_RUN=False for the full experiment. QUICK_RUN=True uses 150 images per class and one epoch to check the pipeline only.
