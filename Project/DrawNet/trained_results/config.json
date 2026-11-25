@@ -1,0 +1,22 @@
+{
+  "seed": 42,
+  "quick_run": false,
+  "classes": [
+    "tree",
+    "cup",
+    "bicycle",
+    "apple",
+    "cat",
+    "car",
+    "house",
+    "fish",
+    "flower",
+    "umbrella"
+  ],
+  "samples_per_class": 3000,
+  "epochs": 15,
+  "batch_size": 64,
+  "learning_rate": 0.001,
+  "rotation": 0.05,
+  "translation": 0.08
+}

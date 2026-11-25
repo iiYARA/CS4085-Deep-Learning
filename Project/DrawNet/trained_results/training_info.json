@@ -1,0 +1,14 @@
+{
+  "m0": {
+    "training_seconds": 121.06748623500005,
+    "process_rss_start_MiB": 824.0390625,
+    "process_rss_end_MiB": 904.86328125,
+    "best_validation_epoch": 15
+  },
+  "m1": {
+    "training_seconds": 131.21248315699995,
+    "process_rss_start_MiB": 908.58984375,
+    "process_rss_end_MiB": 863.11328125,
+    "best_validation_epoch": 15
+  }
+}
